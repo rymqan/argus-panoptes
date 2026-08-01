@@ -2,7 +2,8 @@ name: Odyssey watch
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # off-peak minutes: GitHub heavily drops/delays schedules on :00/:15/:30/:45
+    - cron: "6,21,36,51 * * * *"
   workflow_dispatch:
     inputs:
       test:
