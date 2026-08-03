@@ -1,0 +1,44 @@
+name: Seat watch
+
+on:
+  schedule:
+    - cron: "11,41 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Send even if this pick was already reported"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seat-watch
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: pip install --quiet pillow
+
+      - name: Find central seats
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MOVIE: ${{ vars.MOVIE || 'Человек-паук' }}
+          DAYS: ${{ vars.DAYS || '7' }}
+          FORCE: ${{ inputs.force && 'true' || 'false' }}
+        run: python3 seats.py
+
+      - name: Commit state
+        run: |
+          git add seats_state.json
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git commit -m "Update seat notification state"
+            git push
+          fi
