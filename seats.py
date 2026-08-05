@@ -26,6 +26,21 @@ CINEMAS = [
     {"chain": "chaplin",  "name": "Chaplin Khan Shatyr",   "id": 6},
 ]
 
+# Halls worth preferring even when a rival seat scores a little better.
+# "rows" pins the wanted row band for that hall, overriding the generic edge-row rule.
+PRIORITY = {
+    ("Chaplin MEGA Silk Way", "зал 6"): {
+        "note": "самый большой экран Астаны, 22×12 м, + Dolby Atmos",
+        "rows": (7, 9),
+    },
+}
+# ...but not at any cost: a badly placed pair in the flagship still loses to a good one elsewhere.
+PRIORITY_MIN_SCORE = 55
+
+
+def priority_of(cinema, hall):
+    return PRIORITY.get((cinema, (hall or "").strip().lower()))
+
 
 def get(url, token=None, referer="https://www.kinopark.kz/"):
     # Kinopark's WAF answers 425 unless the request looks like it came from the site itself.
@@ -162,15 +177,23 @@ def geometry(plan):
     return {"rows": rows, "axis": median(centres), "half": median(halves) or 1}
 
 
-def best_pair(plan):
-    """Closest adjacent free pair to the hall centre, skipping edge rows and edge seats."""
+def best_pair(plan, want_rows=None):
+    """Closest adjacent free pair to the wanted spot, skipping edge rows and edge seats.
+
+    want_rows pins an explicit (first, last) row band for halls we know well; otherwise the
+    generic rule applies — drop the first and last few rows and aim at the middle of the hall.
+    """
     g = geometry(plan)
     rows, n = g["rows"], len(g["rows"])
-    skip = 4 if n >= 12 else 3
-    core = rows[skip:n - skip]
+    if want_rows:
+        core = [r for r in rows if want_rows[0] <= r <= want_rows[1]]
+        mid_row = sum(want_rows) / 2
+    else:
+        skip = 4 if n >= 12 else 3
+        core = rows[skip:n - skip]
+        mid_row = (rows[0] + rows[-1]) / 2
     if not core:
         return None
-    mid_row = (rows[0] + rows[-1]) / 2
     best = None
     for r in core:
         row_seats = sorted([s for s in plan["seats"] if s["row"] == r], key=lambda s: s["col_pos"])
@@ -212,7 +235,7 @@ def _font(size, bold=False):
     return ImageFont.load_default()
 
 
-def render_png(plan, pick, title, subtitle):
+def render_png(plan, pick, title, subtitle, badge=None):
     from PIL import Image, ImageDraw
 
     geometry(plan)
@@ -226,7 +249,8 @@ def render_png(plan, pick, title, subtitle):
     GAP = 5 if CELL >= 20 else 2
     PITCH = CELL + GAP
     grid_w = cols * PITCH - GAP
-    top, PAD = 132, 28
+    band = 34 if badge else 0            # flagship ribbon above the title
+    top, PAD = 132 + band, 28
     W, H = grid_w + 2 * PAD + 64, top + nrows * PITCH + 66
 
     img = Image.new("RGB", (W, H), "#FFFFFF")
@@ -234,13 +258,22 @@ def render_png(plan, pick, title, subtitle):
     x0 = PAD + 32
     fs = _font(min(11, max(7, CELL - 15)))
 
-    d.text((PAD, 20), title, font=_font(19, True), fill="#12141A")
-    d.text((PAD, 48), subtitle, font=_font(14), fill="#6B7280")
+    if badge:
+        bf = _font(12, True)
+        # plain text only: the star glyph is missing from some system fonts and renders as tofu
+        text = "ФЛАГМАНСКИЙ ЗАЛ  ·  " + badge.upper()
+        d.rounded_rectangle([PAD, 16, min(W - PAD, PAD + d.textlength(text, font=bf) + 28), 16 + 26],
+                            radius=13, fill="#7C4DFF")
+        d.text((PAD + 14, 21), text, font=bf, fill="#FFFFFF")
+
+    d.text((PAD, 20 + band), title, font=_font(19, True), fill="#12141A")
+    d.text((PAD, 48 + band), subtitle, font=_font(14), fill="#6B7280")
 
     inset = grid_w * 0.07
-    d.arc([x0 + inset, 72, x0 + grid_w - inset, 116], start=202, end=338, fill="#8E96A1", width=5)
+    d.arc([x0 + inset, 72 + band, x0 + grid_w - inset, 116 + band],
+          start=202, end=338, fill="#8E96A1", width=5)
     sw = d.textlength("Э К Р А Н", font=_font(11))
-    d.text((x0 + (grid_w - sw) / 2, 104), "Э К Р А Н", font=_font(11), fill="#8E96A1")
+    d.text((x0 + (grid_w - sw) / 2, 104 + band), "Э К Р А Н", font=_font(11), fill="#8E96A1")
 
     lbl = _font(11)
     for ri, r in enumerate(rows):
@@ -332,19 +365,23 @@ def main():
         if not plan["seats"]:
             skipped += 1
             continue
-        pick = best_pair(plan)
+        prio = priority_of(s["cinema"], plan["hall"])
+        pick = best_pair(plan, prio.get("rows") if prio else None)
         if pick:
             total = len(plan["seats"])
             free = sum(1 for x in plan["seats"] if x["free"])
             results.append({**s, "plan": plan, "pick": pick, "total": total,
-                            "occ": round(100 * (total - free) / total)})
+                            "occ": round(100 * (total - free) / total), "prio": prio})
     print(f"{len(results)} сеансов с центральной парой, {skipped} недоступны")
     if not results:
         print("нет подходящих мест")
         return
 
-    # best centring first; on a tie prefer the bigger hall, then the emptier session
-    results.sort(key=lambda r: (-r["pick"]["score"], -r["total"], r["occ"]))
+    # priority halls come first once their seat is decent; then best centring, bigger hall, emptier session
+    results.sort(key=lambda r: (0 if (r["prio"] and r["pick"]["score"] >= PRIORITY_MIN_SCORE) else 1,
+                                -r["pick"]["score"], -r["total"], r["occ"]))
+    prio_hits = sum(1 for r in results if r["prio"])
+    print(f"из них в приоритетных залах: {prio_hits}")
     top = results[0]
     pick, plan = top["pick"], top["plan"]
     key = f"{top['date']}|{top['time']}|{top['cinema']}|{plan['hall']}|{pick['nums']}"
@@ -357,20 +394,25 @@ def main():
     dow = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"][datetime.strptime(top["date"], "%Y-%m-%d").weekday()]
     when = f"{dow} {top['date'][8:]}.{top['date'][5:7]}, {top['time']}"
     where = f"{top['cinema']}, {plan['hall']}"
-    caption = (f"🎬 <b>{MOVIE}</b> — свободна пара по центру\n\n"
+    head = "⭐️ <b>ФЛАГМАНСКИЙ ЗАЛ</b>\n\n" if top["prio"] else ""
+    caption = (f"{head}🎬 <b>{MOVIE}</b> — свободна пара по центру\n\n"
                f"{when} · {where} · {top['fmt']}\n"
                f"<b>ряд {pick['row']} из {pick['rows']}, места {pick['nums'][0]}+{pick['nums'][1]}</b>\n"
                f"от оси экрана {pick['off_axis']:+g}, от середины зала {pick['off_mid']:+g} ряда\n"
-               f"зал на {top['total']} мест, занято {top['occ']}% · {plan['price']} ₸\n\n{plan['url']}")
+               f"зал на {top['total']} мест, занято {top['occ']}% · {plan['price']} ₸\n")
+    if top["prio"]:
+        caption += f"⭐️ {top['prio']['note']}\n"
+    caption += f"\n{plan['url']}"
     others = "\n".join(
-        f"· {r['date'][5:]} {r['time']} {r['cinema']} {r['plan']['hall']} — ряд {r['pick']['row']}, "
-        f"места {r['pick']['nums'][0]}+{r['pick']['nums'][1]}"
-        for r in results[1:4])
+        f"{'⭐️ ' if r['prio'] else '· '}{r['date'][5:]} {r['time']} {r['cinema']} {r['plan']['hall']} — "
+        f"ряд {r['pick']['row']}, места {r['pick']['nums'][0]}+{r['pick']['nums'][1]}"
+        for r in results[1:5])
     if others:
         caption += "\n\nЕщё варианты:\n" + others
 
     try:
-        send_photo(render_png(plan, pick, MOVIE, f"{when} · {where}"), caption)
+        send_photo(render_png(plan, pick, MOVIE, f"{when} · {where}",
+                              top["prio"]["note"] if top["prio"] else None), caption)
     except Exception as e:     # picture is nice-to-have, the pick is the point
         print(f"photo failed ({e}); falling back to text")
         send(caption)
