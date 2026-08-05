@@ -1,4 +1,4 @@
-name: Seat watch
+name: Argus Panoptes
 
 on:
   schedule:
@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: seat-watch
+  group: argus-panoptes
 
 jobs:
   check:
