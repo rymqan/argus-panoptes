@@ -13,8 +13,9 @@ import sys
 import urllib.request
 from datetime import date, datetime, timedelta
 
-MOVIE = os.environ.get("MOVIE", "Человек-паук")
-DAYS = int(os.environ.get("DAYS", "7"))
+# ponytail: substring match — "Дюна" covers "Дюна", "Дюна: Часть вторая" and "Дюна: Часть третья"
+MOVIE = os.environ.get("MOVIE", "Дюна")
+DAYS = int(os.environ.get("DAYS", "60"))   # Kinopark opens presale ~6 weeks ahead; Chaplin only ~2 days
 STATE_FILE = "seats_state.json"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
@@ -28,8 +29,18 @@ CINEMAS = [
 
 # Halls worth preferring even when a rival seat scores a little better.
 # "rows" pins the wanted row band for that hall, overriding the generic edge-row rule.
+# "rank" orders the tiers: 0 = the single best hall (gets the banner), 1 = strong halls.
 PRIORITY = {
+    ("Kinopark 8 Saryarka", "зал 1 imax"): {
+        "rank": 0,
+        "note": "IMAX в самом широком зале: ряды до 28 мест при 10 рядах",
+    },
+    ("Kinopark 7 Keruen", "зал 2 imax"): {
+        "rank": 1,
+        "note": "IMAX, экран около 16 м",
+    },
     ("Chaplin MEGA Silk Way", "зал 6"): {
+        "rank": 1,
         "note": "самый большой экран Астаны, 22×12 м, + Dolby Atmos",
         "rows": (7, 9),
     },
@@ -39,7 +50,13 @@ PRIORITY_MIN_SCORE = 55
 
 
 def priority_of(cinema, hall):
-    return PRIORITY.get((cinema, (hall or "").strip().lower()))
+    hall = (hall or "").strip().lower()
+    if (cinema, hall) in PRIORITY:
+        return PRIORITY[(cinema, hall)]
+    # any other IMAX hall still beats a standard one; booking API names them truthfully ("Зал 2 IMAX")
+    if "imax" in hall:
+        return {"rank": 1, "note": "IMAX"}
+    return None
 
 
 def get(url, token=None, referer="https://www.kinopark.kz/"):
@@ -90,7 +107,8 @@ def kp_seances(cinema, tok):
                         if s.get("language") != "rus" or not wanted(start[:10], start[11:16]):
                             continue
                         out.append({"cinema": cinema["name"], "date": start[:10], "time": start[11:16],
-                                    "fmt": fmt, "ref": s["id"], "chain": "kinopark"})
+                                    "fmt": fmt, "ref": s["id"], "chain": "kinopark",
+                                    "title": movie["name"]})
     return out
 
 
@@ -117,12 +135,16 @@ def ch_seances(cinema, _tok=None):
         for movie in json.loads(get(url, referer="https://chaplin.kz/")) or []:
             if MOVIE.lower() not in (movie.get("title") or "").lower():
                 continue
+            # Chaplin lists each dub as its own movie; keep Russian (null = unlabelled, keep)
+            if "рус" not in (movie.get("voiceover_language") or "рус"):
+                continue
             for s in movie.get("schedules") or []:
                 if not wanted(s["date"], s["time"]):
                     continue
                 out.append({"cinema": cinema["name"], "date": s["date"], "time": s["time"],
                             "fmt": s.get("format") or "2D", "ref": s["id"],
-                            "hall_hint": s.get("hall_title"), "chain": "chaplin"})
+                            "hall_hint": s.get("hall_title"), "chain": "chaplin",
+                            "title": movie["title"].capitalize()})
     return out
 
 
@@ -261,7 +283,7 @@ def render_png(plan, pick, title, subtitle, badge=None):
     if badge:
         bf = _font(12, True)
         # plain text only: the star glyph is missing from some system fonts and renders as tofu
-        text = "ФЛАГМАНСКИЙ ЗАЛ  ·  " + badge.upper()
+        text = "ЛУЧШИЙ ЗАЛ  ·  " + badge.upper()
         d.rounded_rectangle([PAD, 16, min(W - PAD, PAD + d.textlength(text, font=bf) + 28), 16 + 26],
                             radius=13, fill="#7C4DFF")
         d.text((PAD + 14, 21), text, font=bf, fill="#FFFFFF")
@@ -378,13 +400,14 @@ def main():
         return
 
     # priority halls come first once their seat is decent; then best centring, bigger hall, emptier session
-    results.sort(key=lambda r: (0 if (r["prio"] and r["pick"]["score"] >= PRIORITY_MIN_SCORE) else 1,
-                                -r["pick"]["score"], -r["total"], r["occ"]))
+    def tier(r):
+        return r["prio"]["rank"] if r["prio"] and r["pick"]["score"] >= PRIORITY_MIN_SCORE else 99
+    results.sort(key=lambda r: (tier(r), -r["pick"]["score"], -r["total"], r["occ"]))
     prio_hits = sum(1 for r in results if r["prio"])
     print(f"из них в приоритетных залах: {prio_hits}")
     top = results[0]
     pick, plan = top["pick"], top["plan"]
-    key = f"{top['date']}|{top['time']}|{top['cinema']}|{plan['hall']}|{pick['nums']}"
+    key = f"{top['title']}|{top['date']}|{top['time']}|{top['cinema']}|{plan['hall']}|{pick['nums']}"
 
     state = json.load(open(STATE_FILE)) if os.path.exists(STATE_FILE) else {"sent": []}
     if key in state["sent"] and os.environ.get("FORCE") != "true":
@@ -394,8 +417,9 @@ def main():
     dow = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"][datetime.strptime(top["date"], "%Y-%m-%d").weekday()]
     when = f"{dow} {top['date'][8:]}.{top['date'][5:7]}, {top['time']}"
     where = f"{top['cinema']}, {plan['hall']}"
-    head = "⭐️ <b>ФЛАГМАНСКИЙ ЗАЛ</b>\n\n" if top["prio"] else ""
-    caption = (f"{head}🎬 <b>{MOVIE}</b> — свободна пара по центру\n\n"
+    best_hall = bool(top["prio"]) and top["prio"]["rank"] == 0
+    head = "⭐️ <b>ЛУЧШИЙ ЗАЛ</b>\n\n" if best_hall else ""
+    caption = (f"{head}🎬 <b>{top['title']}</b> — свободна пара по центру\n\n"
                f"{when} · {where} · {top['fmt']}\n"
                f"<b>ряд {pick['row']} из {pick['rows']}, места {pick['nums'][0]}+{pick['nums'][1]}</b>\n"
                f"от оси экрана {pick['off_axis']:+g}, от середины зала {pick['off_mid']:+g} ряда\n"
@@ -404,15 +428,15 @@ def main():
         caption += f"⭐️ {top['prio']['note']}\n"
     caption += f"\n{plan['url']}"
     others = "\n".join(
-        f"{'⭐️ ' if r['prio'] else '· '}{r['date'][5:]} {r['time']} {r['cinema']} {r['plan']['hall']} — "
+        f"{'⭐️ ' if r['prio'] else '· '}{r['title']} · {r['date'][5:]} {r['time']} {r['cinema']} {r['plan']['hall']} — "
         f"ряд {r['pick']['row']}, места {r['pick']['nums'][0]}+{r['pick']['nums'][1]}"
         for r in results[1:5])
     if others:
         caption += "\n\nЕщё варианты:\n" + others
 
     try:
-        send_photo(render_png(plan, pick, MOVIE, f"{when} · {where}",
-                              top["prio"]["note"] if top["prio"] else None), caption)
+        send_photo(render_png(plan, pick, top["title"], f"{when} · {where}",
+                              top["prio"]["note"] if best_hall else None), caption)
     except Exception as e:     # picture is nice-to-have, the pick is the point
         print(f"photo failed ({e}); falling back to text")
         send(caption)
