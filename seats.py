@@ -31,13 +31,15 @@ CINEMAS = [
 # "rows" pins the wanted row band for that hall, overriding the generic edge-row rule.
 # "rank" orders the tiers: 0 = the single best hall (gets the banner), 1 = strong halls.
 PRIORITY = {
+    # Both IMAX halls share the top tier: only Keruen's screen size (~16 m wide) is published,
+    # Saryarka's is not, so neither can be called better — the seat score decides between them.
+    ("Kinopark 7 Keruen", "зал 2 imax"): {
+        "rank": 0,
+        "note": "IMAX, экран около 16 м в ширину",
+    },
     ("Kinopark 8 Saryarka", "зал 1 imax"): {
         "rank": 0,
-        "note": "IMAX в самом широком зале: ряды до 28 мест при 10 рядах",
-    },
-    ("Kinopark 7 Keruen", "зал 2 imax"): {
-        "rank": 1,
-        "note": "IMAX, экран около 16 м",
+        "note": "IMAX",
     },
     ("Chaplin MEGA Silk Way", "зал 6"): {
         "rank": 1,
