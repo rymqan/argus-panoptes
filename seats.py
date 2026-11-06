@@ -17,6 +17,14 @@ from datetime import date, datetime, timedelta
 MOVIE = os.environ.get("MOVIE", "Дюна")
 DAYS = int(os.environ.get("DAYS", "60"))   # Kinopark opens presale ~6 weeks ahead; Chaplin only ~2 days
 ONLY_IMAX = os.environ.get("ONLY_IMAX", "1") == "1"
+# Comma-separated title substrings to skip. Part Three is already booked (16 Dec), so the
+# bot stays quiet until Part One or Two go on sale.
+EXCLUDE = [x.strip().lower() for x in os.environ.get("EXCLUDE", "третья").split(",") if x.strip()]
+
+
+def title_ok(title):
+    t = (title or "").lower()
+    return MOVIE.lower() in t and not any(x in t for x in EXCLUDE)
 STATE_FILE = "seats_state.json"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
@@ -101,7 +109,7 @@ def kp_seances(cinema, tok):
         url = (f"https://afisha.api.kinopark.kz/api/schedule/hall_format"
                f"?city={KP_CITY}&object={cinema['id']}&start={d}T07:00:00")
         for movie in json.loads(get(url, tok)).get("data") or []:
-            if MOVIE.lower() not in movie.get("name", "").lower():
+            if not title_ok(movie.get("name")):
                 continue
             for obj in movie.get("objects") or []:
                 for fmt, hall in (obj.get("halls") or {}).items():
@@ -136,7 +144,7 @@ def ch_seances(cinema, _tok=None):
     for d in dates():
         url = f"https://chaplin.kz/api/get-cinema-schedule/{cinema['id']}/{d}"
         for movie in json.loads(get(url, referer="https://chaplin.kz/")) or []:
-            if MOVIE.lower() not in (movie.get("title") or "").lower():
+            if not title_ok(movie.get("title")):
                 continue
             # Chaplin lists each dub as its own movie; keep Russian (null = unlabelled, keep)
             if "рус" not in (movie.get("voiceover_language") or "рус"):
