@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 # ponytail: substring match — "Дюна" covers "Дюна", "Дюна: Часть вторая" and "Дюна: Часть третья"
 MOVIE = os.environ.get("MOVIE", "Дюна")
 DAYS = int(os.environ.get("DAYS", "60"))   # Kinopark opens presale ~6 weeks ahead; Chaplin only ~2 days
+ONLY_IMAX = os.environ.get("ONLY_IMAX", "1") == "1"
 STATE_FILE = "seats_state.json"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
@@ -367,6 +368,8 @@ def main():
     tok = kp_tokens()
     found = []
     for c in CINEMAS:
+        if ONLY_IMAX and c["chain"] == "chaplin":   # ponytail: Chaplin has no IMAX halls in Astana
+            continue
         lister, _ = CHAINS[c["chain"]]
         t = tok["SERVER_TOKEN_AFISHA"] if c["chain"] == "kinopark" else None
         try:
@@ -377,6 +380,9 @@ def main():
         print(f"{c['name']}: {len(got)} сеансов подходят по времени")
         found += got
 
+    if ONLY_IMAX:
+        found = [s for s in found if "IMAX" in s["fmt"].upper()]
+        print(f"только IMAX: {len(found)} сеансов")
     results, skipped = [], 0
     for s in found:
         _, planner = CHAINS[s["chain"]]
@@ -388,6 +394,9 @@ def main():
             continue
         if not plan["seats"]:
             skipped += 1
+            continue
+        # schedule labels can lie about halls; trust the booking API's real hall name
+        if ONLY_IMAX and "imax" not in plan["hall"].lower():
             continue
         prio = priority_of(s["cinema"], plan["hall"])
         pick = best_pair(plan, prio.get("rows") if prio else None)
