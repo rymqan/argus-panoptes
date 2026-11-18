@@ -28,7 +28,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MOVIE: ${{ vars.MOVIE || 'Дюна' }}
+          MOVIE: ${{ vars.MOVIE || 'Дюна вторая' }}
           DAYS: ${{ vars.DAYS || '60' }}
           FORCE: ${{ inputs.force && 'true' || 'false' }}
         run: python3 seats.py

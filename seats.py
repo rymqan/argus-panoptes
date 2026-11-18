@@ -13,18 +13,18 @@ import sys
 import urllib.request
 from datetime import date, datetime, timedelta
 
-# ponytail: substring match — "Дюна" covers "Дюна", "Дюна: Часть вторая" and "Дюна: Часть третья"
-MOVIE = os.environ.get("MOVIE", "Дюна")
+# Every word of MOVIE must appear in the title, in any case and order: "Дюна вторая" matches
+# "Дюна: Часть вторая" but not Part One (plain "Дюна", already watched) or Part Three (booked).
+MOVIE = os.environ.get("MOVIE", "Дюна вторая")
 DAYS = int(os.environ.get("DAYS", "60"))   # Kinopark opens presale ~6 weeks ahead; Chaplin only ~2 days
 ONLY_IMAX = os.environ.get("ONLY_IMAX", "1") == "1"
-# Comma-separated title substrings to skip. Part Three is already booked (16 Dec), so the
-# bot stays quiet until Part One or Two go on sale.
-EXCLUDE = [x.strip().lower() for x in os.environ.get("EXCLUDE", "третья").split(",") if x.strip()]
+# Comma-separated title substrings to skip, on top of the MOVIE match.
+EXCLUDE = [x.strip().lower() for x in os.environ.get("EXCLUDE", "").split(",") if x.strip()]
 
 
 def title_ok(title):
     t = (title or "").lower()
-    return MOVIE.lower() in t and not any(x in t for x in EXCLUDE)
+    return all(w in t for w in MOVIE.lower().split()) and not any(x in t for x in EXCLUDE)
 STATE_FILE = "seats_state.json"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
